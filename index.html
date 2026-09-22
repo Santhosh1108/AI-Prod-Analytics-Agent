@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body{font-family:Arial,sans-serif;max-width:760px;margin:60px auto;padding:0 24px}
+    button{padding:12px 18px;border:0;border-radius:8px;cursor:pointer}
+    #status{margin-top:20px}
+  </style>
+</head>
+<body>
+  <h1>MetricLens</h1>
+  <p>AI Product Analytics Reporting Agent</p>
+  <p>Reads product data from the connected Google Sheet, calculates KPIs/funnels/segments, sends the structured findings to Gemini, and creates a Google Docs + PDF report.</p>
+  <button onclick="run()">Generate Product Analytics Report</button>
+  <div id="status"></div>
+<script>
+function run(){
+  document.getElementById('status').textContent='Generating report...';
+  google.script.run
+    .withSuccessHandler(function(r){
+      document.getElementById('status').innerHTML =
+        'Report ready: <a target="_blank" href="'+r.documentUrl+'">Google Doc</a> · ' +
+        '<a target="_blank" href="'+r.pdfUrl+'">PDF</a>';
+    })
+    .withFailureHandler(function(e){
+      document.getElementById('status').textContent='Error: '+e.message;
+    })
+    .generateReport();
+}
+</script>
+</body>
+</html>
