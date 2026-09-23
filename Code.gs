@@ -1,186 +1,86 @@
-const CONFIG = {
-  changeDate: '2026-08-15',
-  model: 'gemini-2.5-flash'
-};
+const CONFIG = { changeDate: '2026-08-15', model: 'gemini-3.6-flash' };
 
 function doGet() {
   return HtmlService.createHtmlOutputFromFile('index')
-    .setTitle('MetricLens — Product Analytics Reporting Agent');
+    .setTitle('MetricLens — AI Product Analytics Reporting Agent');
 }
 
 function generateReport() {
-  const data = buildAnalytics();
-  const commentary = callGemini(data);
-  const report = buildReport(data, commentary);
-
-  const doc = DocumentApp.create('MetricLens Product Analytics Report');
+  const analytics = buildAnalytics();
+  const ai = callGemini(analytics);
+  const report = buildReport(analytics, ai);
+  const stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd_HH-mm');
+  const doc = DocumentApp.create('MetricLens Product Analytics Report - ' + stamp);
   doc.getBody().setText(report);
   doc.saveAndClose();
-
-  const pdf = DriveApp.getFileById(doc.getId()).getAs(MimeType.PDF);
-  const pdfFile = DriveApp.createFile(pdf).setName('MetricLens Product Analytics Report.pdf');
-
-  return {
-    documentUrl: doc.getUrl(),
-    pdfUrl: pdfFile.getUrl(),
-    summary: data.summary
-  };
+  const pdf = DriveApp.getFileById(doc.getId()).getAs(MimeType.PDF)
+    .setName('MetricLens Product Analytics Report - ' + stamp + '.pdf');
+  const pdfFile = DriveApp.createFile(pdf);
+  return {documentUrl: doc.getUrl(), pdfUrl: pdfFile.getUrl(), summary: analytics.summary};
 }
 
 function readSheet_(name) {
   const sheet = SpreadsheetApp.getActive().getSheetByName(name);
-  if (!sheet) throw new Error('Missing sheet: ' + name);
+  if (!sheet) return [];
   const values = sheet.getDataRange().getValues();
+  if (values.length < 2) return [];
   const headers = values.shift().map(String);
   return values.map(row => {
-    const obj = {};
-    headers.forEach((h, i) => obj[h] = row[i]);
-    return obj;
+    const obj = {}; headers.forEach((h,i) => obj[h] = row[i]); return obj;
   });
 }
+function pct_(n,d){ return d ? +(n/d*100).toFixed(2) : 0; }
+function unique_(a){ return [...new Set(a)]; }
 
 function buildAnalytics() {
-  const users = readSheet_('users');
-  const events = readSheet_('events');
-
-  const change = new Date(CONFIG.changeDate + 'T00:00:00');
-  const userMap = {};
-  users.forEach(u => userMap[String(u.user_id)] = u);
-
-  const before = new Set();
-  const after = new Set();
-  const eventsByPeriod = {before: [], after: []};
-
-  events.forEach(e => {
-    const d = new Date(e.event_timestamp);
-    const period = d < change ? 'before' : 'after';
-    const id = String(e.user_id);
-    if (period === 'before') before.add(id); else after.add(id);
-    eventsByPeriod[period].push({
-      user_id: id,
-      event_name: String(e.event_name)
-    });
-  });
-
-  function activation(periodEvents, cohort) {
-    const activated = new Set(
-      periodEvents.filter(e => e.event_name === 'core_action_completed')
-        .map(e => e.user_id)
-    );
-    return cohort.size ? +(activated.size / cohort.size * 100).toFixed(2) : 0;
-  }
-
-  const beforeAct = activation(eventsByPeriod.before, before);
-  const afterAct = activation(eventsByPeriod.after, after);
-
-  const steps = [
-    'signup',
-    'onboarding_started',
-    'onboarding_step_1_completed',
-    'onboarding_step_2_completed',
-    'onboarding_step_3_completed',
-    'core_action_completed'
-  ];
-
-  function funnel(periodEvents, cohort) {
-    return steps.map(step => {
-      const n = new Set(periodEvents.filter(e => e.event_name === step)
-        .map(e => e.user_id)).size;
-      return {step, users: n, rate: cohort.size ? +(n/cohort.size*100).toFixed(2) : 0};
+  const users=readSheet_('users'), events=readSheet_('events');
+  const feature=readSheet_('feature_usage'), history=readSheet_('historical_metrics');
+  const change=new Date(CONFIG.changeDate+'T00:00:00');
+  const ev=events.map(e=>({user_id:String(e.user_id),event_name:String(e.event_name),timestamp:new Date(e.event_timestamp)}));
+  const before=ev.filter(e=>e.timestamp<change), after=ev.filter(e=>e.timestamp>=change);
+  const beforeUsers=new Set(before.map(e=>e.user_id)), afterUsers=new Set(after.map(e=>e.user_id));
+  const steps=['signup','onboarding_started','onboarding_step_1_completed','onboarding_step_2_completed','onboarding_step_3_completed','core_action_completed'];
+  function activation(rows,cohort){return pct_(new Set(rows.filter(e=>e.event_name==='core_action_completed').map(e=>e.user_id)).size,cohort.size);}
+  function funnel(rows,cohort){return steps.map(step=>{const n=new Set(rows.filter(e=>e.event_name===step).map(e=>e.user_id)).size;return {step,users:n,rate_pct:pct_(n,cohort.size)}});}
+  function segments(rows,cohort,dim){
+    return unique_(users.map(u=>String(u[dim]||'')).filter(Boolean)).map(value=>{
+      const ids=new Set(users.filter(u=>String(u[dim])===value).map(u=>String(u.user_id)));
+      const scoped=new Set([...cohort].filter(id=>ids.has(id)));
+      return {dimension:dim,segment:value,users:scoped.size,activation_pct:activation(rows.filter(e=>scoped.has(e.user_id)),scoped)};
     });
   }
-
-  function segmentAnalysis(period, cohort) {
-    const result = [];
-    ['platform', 'acquisition_channel', 'plan'].forEach(dim => {
-      const values = [...new Set(users.map(u => u[dim]))];
-      values.forEach(value => {
-        const ids = new Set(users.filter(u => u[dim] === value).map(u => String(u.user_id)));
-        const scopedCohort = new Set([...cohort].filter(id => ids.has(id)));
-        const scopedEvents = eventsByPeriod[period].filter(e => scopedCohort.has(e.user_id));
-        result.push({
-          dimension: dim,
-          segment: String(value),
-          users: scopedCohort.size,
-          activation_pct: activation(scopedEvents, scopedCohort)
-        });
-      });
-    });
-    return result;
-  }
-
-  const summary = {
-    users: users.length,
-    events: events.length,
-    before_activation_pct: beforeAct,
-    after_activation_pct: afterAct,
-    change_pp: +(afterAct - beforeAct).toFixed(2),
-    change_date: CONFIG.changeDate
-  };
-
+  const b=activation(before,beforeUsers), a=activation(after,afterUsers);
+  let seg=[]; ['platform','acquisition_channel','plan'].forEach(d=>seg=seg.concat(segments(after,afterUsers,d)));
   return {
-    summary,
-    funnel_before: funnel(eventsByPeriod.before, before),
-    funnel_after: funnel(eventsByPeriod.after, after),
-    segments_before: segmentAnalysis('before', before),
-    segments_after: segmentAnalysis('after', after),
-    caveat: 'Synthetic portfolio dataset. Pre/post comparison is descriptive and not causal proof.'
+    summary:{users:users.length,events:events.length,before_activation_pct:b,after_activation_pct:a,activation_change_pp:+(a-b).toFixed(2),change_date:CONFIG.changeDate},
+    funnel:{before:funnel(before,beforeUsers),after:funnel(after,afterUsers)},
+    segments:seg,
+    feature_usage:feature.map(r=>({feature:String(r.feature||r.feature_name||''),users:Number(r.users||r.unique_users||0),usage_pct:Number(r.usage_pct||r.adoption_pct||0)})),
+    historical_metrics:history.map(r=>({period:String(r.period||r.date||''),activation_pct:Number(r.activation_pct||r.activation||0),retention_pct:Number(r.retention_pct||r.retention||0)})),
+    caveat:'Synthetic portfolio dataset. Observational comparisons are descriptive and do not establish causality.'
   };
 }
 
 function callGemini(data) {
-  const key = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
-  if (!key) throw new Error('Set GEMINI_API_KEY in Apps Script Project Settings.');
-
-  const prompt = `You are a product analytics reporting assistant.
-Write a concise professional product analytics report from the calculated data below.
-
-Rules:
-- Use only the supplied numbers.
-- Do not invent metrics.
-- Distinguish measured findings from hypotheses.
-- Include: executive summary, key findings, likely drivers, recommended experiment, primary metric, guardrails, limitations.
-- The dataset is synthetic; do not claim real business impact.
-
-CALCULATED DATA:
-${JSON.stringify(data, null, 2)}`;
-
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-              CONFIG.model + ':generateContent?key=' + encodeURIComponent(key);
-
-  const payload = {
-    contents: [{parts: [{text: prompt}]}],
-    generationConfig: {temperature: 0.2}
-  };
-
-  const response = UrlFetchApp.fetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  });
-
-  const code = response.getResponseCode();
-  const body = JSON.parse(response.getContentText());
-  if (code >= 300) throw new Error(JSON.stringify(body));
-
+  const key=PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  if(!key) throw new Error('Missing GEMINI_API_KEY in Script Properties.');
+  const prompt=`You are MetricLens, a product analytics reporting agent. Analyze ONLY the calculated data below.
+Produce: executive summary; KPI interpretation; funnel findings; segment findings; feature usage observations; trend observations; evidence-backed findings; clearly labeled hypotheses; recommended product experiment; primary metric; guardrails; limitations.
+Never invent numbers. Do not claim causality. Treat data as synthetic portfolio data.
+DATA:\n${JSON.stringify(data,null,2)}`;
+  const url='https://generativelanguage.googleapis.com/v1beta/models/'+CONFIG.model+':generateContent?key='+encodeURIComponent(key);
+  const res=UrlFetchApp.fetch(url,{method:'post',contentType:'application/json',payload:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.2}}),muteHttpExceptions:true});
+  const body=JSON.parse(res.getContentText());
+  if(res.getResponseCode()>=300) throw new Error(JSON.stringify(body));
   return body.candidates[0].content.parts[0].text;
 }
 
-function buildReport(data, commentary) {
-  const s = data.summary;
-  return [
-    'METRICLENS — PRODUCT ANALYTICS REPORT',
-    '',
-    'EXECUTIVE SUMMARY',
-    commentary,
-    '',
-    'STRUCTURED METRICS',
-    JSON.stringify(data, null, 2),
-    '',
-    'DATA NOTE',
-    s.users + ' synthetic users and ' + s.events + ' synthetic events were analyzed.',
-    'Activation changed by ' + s.change_pp + ' percentage points around ' + s.change_date + '.',
-    'This pre/post analysis is descriptive and not causal proof.'
-  ].join('\n');
+function buildReport(data,ai) {
+  const s=data.summary;
+  return ['METRICLENS','AI PRODUCT ANALYTICS REPORT','',ai,'','STRUCTURED KPI SNAPSHOT',
+    'Users analyzed: '+s.users,'Events analyzed: '+s.events,
+    'Activation before change: '+s.before_activation_pct+'%',
+    'Activation after change: '+s.after_activation_pct+'%',
+    'Activation change: '+s.activation_change_pp+' percentage points',
+    'Change date: '+s.change_date,'','DATA LIMITATION',data.caveat,'','Generated by MetricLens'].join('\n');
 }
