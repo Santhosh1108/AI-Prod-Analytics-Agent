@@ -1,4 +1,4 @@
-# MetricLens — Final AI Product Analytics Reporting Agent
+# AI-Prod-Analytics-Agent  — AI Product Analytics Reporting Agent
 
 Cloud-first product analytics reporting workflow inspired by the architecture of the reference AI Financial Reporting Agent, but built for product analytics.
 
