@@ -1,12 +1,17 @@
 <!doctype html><html><head><base target="_top"><style>
 body{font-family:Arial,sans-serif;max-width:850px;margin:55px auto;padding:0 24px;line-height:1.6}
 button{background:#111;color:#fff;padding:13px 20px;border:0;border-radius:8px;cursor:pointer;font-size:15px}
-#status{margin-top:22px;padding:14px;border-radius:8px;background:#f5f5f5}a{margin-right:14px}
-</style></head><body><h1>MetricLens</h1><p>AI Product Analytics Reporting Agent</p>
-<p>Product data → analytics → Gemini insights → Google Docs/PDF report.</p>
+#status{margin-top:22px;padding:14px;border-radius:8px;background:#f5f5f5}
+a{margin-right:14px}
+</style></head><body>
+<h1>MetricLens</h1><p>AI Product Analytics Reporting Agent</p>
+<p>Structured product data → analytics → Gemini → decision-oriented report.</p>
 <button onclick="run()">Generate Product Analytics Report</button><div id="status">Ready.</div>
 <script>
-function run(){document.getElementById('status').textContent='Analyzing → generating Gemini insights → creating report...';
-google.script.run.withSuccessHandler(function(r){document.getElementById('status').innerHTML='<strong>Report generated.</strong><br><br><a target="_blank" href="'+r.documentUrl+'">Google Doc</a><a target="_blank" href="'+r.pdfUrl+'">PDF</a>';})
-.withFailureHandler(function(e){document.getElementById('status').textContent='Error: '+e.message;}).generateReport();}
+function run(){
+document.getElementById('status').textContent='Analyzing data and generating report...';
+google.script.run.withSuccessHandler(function(r){
+document.getElementById('status').innerHTML='<strong>Report generated.</strong><br><br><a target="_blank" href="'+r.documentUrl+'">Google Doc</a><a target="_blank" href="'+r.pdfUrl+'">PDF</a>';
+}).withFailureHandler(function(e){document.getElementById('status').textContent='Error: '+e.message;}).generateReport();
+}
 </script></body></html>
